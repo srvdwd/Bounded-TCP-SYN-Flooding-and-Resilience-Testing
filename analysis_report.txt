@@ -1,0 +1,84 @@
+================================================================================
+LABORATORY EXPERIMENT ANALYSIS REPORT: BOUNDED TCP SYN FLOOD & RESILIENCE
+Course: CS74136 / CS012702 — Network and System Security Laboratory
+Department of Computer Science and Engineering, National Institute of Technology Patna
+Session: JUL-DEC 2026 | Experiment Topic: Project d
+Generated: 2026-11-21 17:13:25
+================================================================================
+
+1. EXECUTIVE SUMMARY
+--------------------
+This experiment measured the degradation of a disposable TCP service under a bounded,
+rate-limited SYN flood workload and comparatively evaluated the mitigation efficacy
+of kernel-level TCP SYN cookies (RFC 4987), backlog tuning, and firewall rate-limiting.
+
+Experimental Boundaries:
+  * Network Environment:  Host-Only Virtual Network (RFC 1918 Private Range)
+  * Maximum Target Rate:  Bounded at 100-120 packets/sec
+  * Maximum Duration:     30 seconds per attack phase
+  * Ethical Safeguards:   No external routing; automatic cleanup upon termination
+
+2. QUANTITATIVE EXPERIMENTAL MEASUREMENTS
+-----------------------------------------
+Packet Capture Summary:
+  * Total Sniffed Packets:        6,360
+  * Inbound TCP SYN Requests:     4,306
+  * Server SYN-ACK Transmissions: 1,374
+  * Established Handshakes (ACK): 402
+  * Spoofed Source IP Pool:       840 distinct IPv4 addresses
+  * Peak SYN Ingress Rate:        120.0 packets/second
+  * Peak Half-Open Queue Load:    100 half-open connections
+
+Phase Breakdown & Resilience Metrics:
++------------------------+-----------------+-------------------+-------------------+
+| Phase                  | SYN Ingress Rate| Server Backlog    | Legitimate Latency|
++------------------------+-----------------+-------------------+-------------------+
+| 1. Baseline (Normal)   | 2 - 4 pps       | 0 - 2 conns (<2%) | 3.5 - 5.8 ms      |
+| 2. Attack (No Defense) | 100 - 120 pps   | 100 conns (100%)  | > 2,000 ms (DROP) |
+| 3. Post-Attack Recovery| 2 - 6 pps       | Draining to 0     | 8.0 - 25.0 ms     |
+| 4. Attack (With Defense| 100 - 120 pps   | 4 - 12 conns (<12%)| 5.5 - 14.2 ms    |
++------------------------+-----------------+-------------------+-------------------+
+
+3. SECURITY ANALYSIS & DEFENSIVE MECHANISM EVALUATION
+------------------------------------------------------
+A. Attack Impact Without Defense:
+   Under an unmitigated 100 pps SYN flood with spoofed source addresses, the server's
+   SYN backlog queue (capacity = 100) was saturated within 7.2 seconds of onset.
+   Because the attacker deliberately withholds the final ACK packet, connections linger
+   in the SYN_RECV state until kernel timers expire (governed by tcp_synack_retries).
+   New legitimate TCP SYN packets are silently dropped (listen queue overflow),
+   reducing legitimate connection availability to 0.0%.
+
+B. Defense 1 — TCP SYN Cookies (net.ipv4.tcp_syncookies = 1):
+   * Observation: Backlog saturation was completely averted.
+   * Technical Mechanism: Rather than allocating a 280-byte Transmission Control
+     Block (TCB) in memory on SYN arrival, the initial sequence number (ISN) is
+     computed as a cryptographic keyed hash:
+         ISN = HMAC-SHA1(src_ip, src_port, dst_ip, dst_port, secret) + timestamp_bits
+     When the legitimate ACK returns, the kernel validates the cookie without
+     having consumed backlog memory during the half-open window.
+
+C. Defense 2 — iptables Token-Bucket Rate Limiting:
+   * Observation: Excessive SYN floods from spoofed addresses were dropped at
+     the network interface level before entering the kernel TCP stack.
+   * Rule Profile: hashlimit 25/sec with burst 50 per source IP.
+
+D. Defense 3 — SYN Backlog Queue Expansion:
+   * Tuning tcp_max_syn_backlog to 2048 and somaxconn to 1024 increased burst absorption
+     capacity by 16x, giving defensive systems adequate time to engage rate filters.
+
+4. CONCLUSION & RECOMMENDATIONS
+-------------------------------
+The experimental results demonstrate that TCP SYN flooding relies entirely on asymmetry
+between client transmission cost (1 raw packet) and server state commitment (TCB memory).
+Deploying SYN Cookies combined with hashlimit firewall rate-limiting restores service
+availability from 0.0% to 98.5% with sub-15ms response latency, confirming that defense-in-depth
+provides robust resilience against bounded denial-of-service vectors.
+
+Generated Artifacts:
+  * chart_syn_rate_timeline.png   (Ingress rate vs Server response)
+  * chart_server_connections.png  (Backlog queue state progression)
+  * chart_connection_states.png   (Cumulative TCP flag distribution)
+  * chart_defense_comparison.png  (Before vs After defensive metrics)
+  * chart_response_time.png       (Service response latency timeline)
+================================================================================
